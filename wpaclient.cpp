@@ -591,6 +591,12 @@ try_again:
 		return true;
 	}
 
+	bool WPAClient::DisconnectWiFi(void) 
+	{
+		CheckCommandWithOk("DISCONNECT");
+		return true;
+	}
+
 	bool WPAClient::GetWPAStatus() 
 	{
 		std::string cmd = "STATUS";
@@ -632,7 +638,12 @@ try_again:
 	{
 		std::string cmd = "SCAN";
 		std::string recv;
+		char recv_ssid[100] = {};
+		char wlaninfo[2048] = {};
+		FILE *fd;
 		int addr;
+		int pos = 0;
+		int ret = 0;
 		int i = 0;
 
 		while(1)
@@ -679,6 +690,31 @@ try_again:
 
 		//fot debug
 		//printf("%s\n",recv.data());
+
+		sprintf(wlaninfo,"[");
+		while(1)
+		{
+			pos = recv.find("\n",pos);
+			if(pos == -1)
+			{
+				break;
+			}
+			memset(recv_ssid,0,sizeof(recv_ssid));
+			ret = sscanf(recv.data()+pos,"%*[^[]%*[^\t]%*[\t]%[^\n]",recv_ssid);
+			if(ret != -1 && strlen(recv_ssid) != 0)
+			{
+				NOTICE("[scan_ssid]:%s\n",recv_ssid);
+				sprintf(wlaninfo,"%s\"%s\",",wlaninfo,recv_ssid);
+			}
+			pos++;
+		}
+		wlaninfo[strlen(wlaninfo)] = ']';
+		fd = fopen("/tmp/wlaninfo.conf","w");
+		if(fd)
+		{
+			fwrite(wlaninfo,1,strlen(wlaninfo),fd);
+			fclose(fd);
+		}
 
 		addr = recv.find(ssid.data());
 		if (addr == -1) 

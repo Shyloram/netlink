@@ -15,6 +15,11 @@
 
 static int wifi_status;
 static int wifi_changebyinterface;
+static int g_factoryflag;
+static int g_processAlive;
+#ifdef EN_ZINK
+static int g_sapAlive;
+#endif
 static char g_ssid[100];
 static char g_pawd[100];
 pthread_mutex_t g_mutex;
@@ -56,28 +61,87 @@ int check_wpa_status(wifi::WPAClient& wpa_client)
 	return WIFI_STEP_SCAN;
 }
 
+#ifdef EN_ZINK
+void start_sap()
+{
+	g_sapAlive = 1;
+	char cmd[256] = {0};
+	//open soft AP
+	NOTICE("StartSoftAP_Mode Starting \n");
+	wifi::wifi_system("ifconfig wlan1 down");
+	usleep(100000);
+	wifi::wifi_system("ifconfig wlan1 up");
+	usleep(200000);
+	sprintf(cmd, "%s wlan1 mode 3", IWCONFIG_TOOL);
+	wifi::wifi_system(cmd);
+	usleep(200000);
+	wifi::wifi_system("ifconfig wlan1 192.168.10.1");
+	usleep(100000);
+	// soft AP: ZMD_SAP
+	sprintf(cmd, "%s -B %s", HOSTAPD_TOOL, HOSTAPD_CONF_FILE);
+	wifi::wifi_system(cmd);
+	//udhcpd
+	sprintf(cmd, "%s %s", UDHCPD_TOOL, DHCPD_CONF_FILE);
+	wifi::wifi_system(cmd);
+	//httpd
+	sprintf(cmd, "%s -p 8087 -h %s", HTTPD_TOOL, HTTP_DIR);
+	wifi::wifi_system(cmd);
+	sprintf(cmd, "%s -p 8086 -h %s", HTTPD_TOOL, HTTP_TIMEOUT_DIR);
+	wifi::wifi_system(cmd);
+}
+
+void stop_sap()
+{
+	char cmd[256] = {0};
+	if(g_sapAlive)
+	{
+		g_sapAlive = 0;
+		wifi::wifi_system("killall -9 hostapd");
+		usleep(200000);
+		wifi::wifi_system("killall -9 udhcpd");
+		wifi::wifi_system("killall -9 httpd");
+
+		NOTICE("<WLAN1> Stop ZMD_SAP Server OK:");
+		wifi::wifi_system("ifconfig wlan1 0.0.0.0");
+		usleep(100000);
+		sprintf(cmd, "%s wlan1 mode 2", IWCONFIG_TOOL);
+		wifi::wifi_system(cmd);
+		usleep(100000);
+		wifi::wifi_system("ifconfig wlan1 down");
+	}
+}
+#endif
+
 int scan_ssid_password(wifi::WPAClient& wpa_client)
 {
 	int flag = 10;
+
+#ifdef EN_ZINK
+	int first_in_sap = 1;
+#endif
+
 	while(1)
 	{
-		//check ZMD_AP 
-		if(flag++ % 5 == 0)
+		if(!g_factoryflag)
 		{
-			NOTICE("check ZMD_AP(times:%d)!\n",flag);
-			if(wpa_client.ScanAP("ZMD_AP"))
+			//check ZMD_AP 
+			if(flag++ % 5 == 0)
 			{
-				NOTICE("scan ap found ZMD_AP\n");
-				return WIFI_STEP_GET_FROM_AP;
+				NOTICE("check ZMD_AP(times:%d)!\n",flag);
+				if(wpa_client.ScanAP("ZMD_AP"))
+				{
+					NOTICE("scan ap found ZMD_AP\n");
+					return WIFI_STEP_GET_FROM_AP;
+				}
+				sleep(1);
 			}
-			sleep(1);
-		}
 
-		//check FILE
-		NOTICE("check FILE(times:%d)!\n",flag);
-		if(access(AP_CONF_PATH, F_OK) == 0)
-		{
-			return WIFI_STEP_GET_FROM_FILE;
+			//check FILE
+			NOTICE("check FILE(times:%d)!\n",flag);
+			if(access(AP_CONF_PATH, F_OK) == 0)
+			{
+				return WIFI_STEP_GET_FROM_FILE;
+			}
 		}
 
 		//check Interface
@@ -95,6 +159,14 @@ int scan_ssid_password(wifi::WPAClient& wpa_client)
 		}
 
 		sleep(1);
+
+#ifdef EN_ZINK
+		if(first_in_sap)
+		{
+			start_sap();
+			first_in_sap = 0;
+		}
+#endif
 	
 		//reconfig wifi  
 		if(flag > 30)
@@ -494,6 +566,7 @@ void *SoftAPServer_Thread(void *para)
 
 int open_AP(wifi::WPAClient *wpa_client)
 {
+	stop_sap();
 	pthread_t pid;
 	if(pthread_create(&pid,NULL,SoftAPServer_Thread,(void*)wpa_client) < 0)
 	{
@@ -505,6 +578,7 @@ int open_AP(wifi::WPAClient *wpa_client)
 int dhcp_ip(wifi::WPAClient& wpa_client)
 {
 	static int times = 0;
+	stop_sap();
 	if(!wpa_client.DhcpIP())
 	{
 		ERROR("dhcp ip failed!\n");
@@ -559,6 +633,7 @@ int check_wifi_status(wifi::WPAClient& wpa_client)
 void* WifiProcess(void* para)
 {
 	prctl(PR_SET_NAME, __FUNCTION__);
+	pthread_detach(pthread_self());
 	wifi::WPAClient wpa_client;
 	int step = WIFI_STEP_IDLE;
 
@@ -568,7 +643,7 @@ void* WifiProcess(void* para)
 		pthread_exit(0);
 	}
 
-	while(1)
+	while(g_processAlive)
 	{
 		switch(step)
 		{
@@ -600,8 +675,8 @@ void* WifiProcess(void* para)
 				break;
 
 			case WIFI_STEP_CONNECTING:
-				set_led_status(WIFI_LED_B_FLASH);
 				NOTICE("STEP: WIFI_STEP_CONNECTING\n");
+				set_led_status(WIFI_LED_B_FLASH);
 				step = connect_wifi(wpa_client);
 				break;
 
@@ -612,6 +687,7 @@ void* WifiProcess(void* para)
 
 			case WIFI_STEP_DHCP_IP:
 				NOTICE("STEP: WIFI_STEP_DHCP_IP\n");
+				set_led_status(WIFI_LED_B_FLASH);
 				step = dhcp_ip(wpa_client);
 				break;
 				
@@ -620,10 +696,16 @@ void* WifiProcess(void* para)
 				break;
 		}
 	}
+	NOTICE("WIFI LIB will exit!\n");
+	set_led_status(WIFI_LED_B_FLASH);
+	wpa_client.DisconnectWiFi(); 
+	pthread_exit(0);
 }
 
-int InitWifi(void)
+int InitWifi(int factoryflag)
 {
+	g_factoryflag = factoryflag;
+	g_processAlive = 1;
 	pthread_t pid;
 	if(pthread_create(&pid,NULL,WifiProcess,NULL) < 0)
 	{
@@ -632,6 +714,11 @@ int InitWifi(void)
 	}
 	pthread_mutex_init(&g_mutex,NULL);
 	return 0;
+}
+
+void ReleaseWifi(void)
+{
+	g_processAlive = 0;
 }
 
 void GetWifiVersion(void)
@@ -644,7 +731,7 @@ int GetConnectStatus(void)
 	return wifi_status;
 }
 
-int SetWifiConfig(char* ssid,char* password)
+int SetWifiConfig(char* ssid,char* password,int forceflag)
 {
 	if(NULL == ssid)
 	{
@@ -652,7 +739,7 @@ int SetWifiConfig(char* ssid,char* password)
 		return -1;
 	}
 
-	if(!strcmp(g_ssid,ssid) && !strcmp(g_pawd,password))
+	if(!forceflag && !strcmp(g_ssid,ssid) && !strcmp(g_pawd,password))
 	{
 		ERROR("ssid password is same!\n");
 		return -1;

@@ -10,13 +10,15 @@
  *      0    successed
  *     -1    failed
  * ************************************/
-int InitWifi(void);
+int InitWifi(int factoryflag = 0);
+
+/*************************************
+ * eink moudle releasw API
+ * ************************************/
+void ReleaseWifi(void);
 
 /*************************************
  * get wifi lib version
- * return:
- *  version  successed
- *     -1    failed
  * ************************************/
 void GetWifiVersion(void);
 
@@ -34,4 +36,4 @@ int GetConnectStatus(void);
  *      0    successed
  *      -1   failed
  * ************************************/
-int SetWifiConfig(char* ssid,char* password);
+int SetWifiConfig(char* ssid,char* password,int forceflag = 0);

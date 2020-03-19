@@ -83,6 +83,7 @@ namespace wifi
 			bool SaveconfigWiFi();
 			bool SaveUseridFile(const char* filepath);
 			bool ConnectWiFi();   
+			bool DisconnectWiFi();   
 			bool GetWPAStatus();
 			bool DhcpIP();
 			bool ScanAP(const std::string & ssid);
