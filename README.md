@@ -1,2 +1,2 @@
 # netlink
-ues wpa function config the wifi
+use wpa function config the wifi
